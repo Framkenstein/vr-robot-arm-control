@@ -143,6 +143,9 @@ export class XrMechanicalControllerInput {
         this._worldPosition.add(__wristOffset);
 
 
+        // Log the controller's world position
+        console.log(`Mechanical Controller ${this._handSide} position:`, this._worldPosition);
+
         // Convert world position and rotation to relative to the parent object
         this._localPosition.copy(this._worldPosition);
         this._localPosition.sub(this._grip.parent.position);

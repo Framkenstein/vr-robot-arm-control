@@ -41,7 +41,18 @@ export class XrInput {
         this._head.update();
         this._leftHandController?.onAnimate();       
         this._rightHandController?.onAnimate();   
-        
+
+    // Log left-hand controller position
+    if (this._leftHandController) {
+        console.log('Left hand controller position:', this._leftHandController.wristWPos);
+    }
+
+    // Log right-hand controller position
+    if (this._rightHandController) {
+        console.log('Right hand controller position:', this._rightHandController.wristWPos);
+    }
+
+   
         this.updateDebugPointers(this._leftPointer, this._leftHandController);
         this.updateDebugPointers(this._rightPointer, this._rightHandController);
     }
