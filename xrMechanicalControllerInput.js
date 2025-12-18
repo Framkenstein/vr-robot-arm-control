@@ -24,10 +24,16 @@ const SEND_INTERVAL_MS = 50;  // Send at 20Hz max
 // Track which hand controls the robot (default: right)
 let controlHand = 'right';
 
-// Get the relay server URL (same host as web server, port 8081, secure)
+// Get the relay server URL (same host and port as web server for combined server)
 function getRelayUrl() {
   const host = window.location.hostname;
-  return `wss://${host}:8081`;  // wss:// for secure WebSocket
+  const port = window.location.port;
+  // If there's a port (local dev), include it. If no port (ngrok), omit it.
+  if (port) {
+    return `wss://${host}:${port}`;
+  } else {
+    return `wss://${host}`;
+  }
 }
 
 /**
@@ -180,6 +186,21 @@ export function sendStop() {
 export function sendHome() {
   sendToRelay({ type: 'home' });
   console.log('HOME command sent');
+}
+
+/**
+ * Send keyboard movement command
+ * @param {number} base - Base rotation (-1, 0, 1)
+ * @param {number} shoulder - Shoulder movement (-1, 0, 1)
+ * @param {number} elbow - Elbow movement (-1, 0, 1)
+ */
+export function sendKeyboardMove(base, shoulder, elbow) {
+  console.log(`sendKeyboardMove called: base=${base}, shoulder=${shoulder}, elbow=${elbow}, connected=${isConnected}`);
+  if (!isConnected) {
+    console.warn('Not connected - keyboard command not sent');
+    return;
+  }
+  sendToRelay({ type: 'keyboard', base, shoulder, elbow });
 }
 
 /**

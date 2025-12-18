@@ -153,9 +153,12 @@ void processSerialCommand(String cmd) {
         Serial.println(z, 3);
       }
       
-      if (safety_enabled) {
-        processVrPosition(x, y, z);
+      // Auto-enable on first position command
+      if (!safety_enabled) {
+        safety_enabled = true;
+        Serial.println(">>> AUTO-ENABLED <<<");
       }
+      processVrPosition(x, y, z);
     }
   }
   else if (cmd.startsWith("E:")) {
@@ -177,6 +180,39 @@ void processSerialCommand(String cmd) {
   }
   else if (cmd == "STATUS") {
     printStatus();
+  }
+  else if (cmd.startsWith("K:")) {
+    // Keyboard command from web: "K:base,shoulder,elbow" (-1, 0, or 1 for each)
+    last_command_time = millis();  // Reset timeout
+    
+    String params = cmd.substring(2);
+    int comma1 = params.indexOf(',');
+    int comma2 = params.indexOf(',', comma1 + 1);
+    
+    if (comma1 > 0 && comma2 > comma1) {
+      int base = params.substring(0, comma1).toInt();
+      int shoulder = params.substring(comma1 + 1, comma2).toInt();
+      int elbow = params.substring(comma2 + 1).toInt();
+      
+      // Auto-enable on first keyboard command
+      if (!safety_enabled) {
+        safety_enabled = true;
+        Serial.println(">>> AUTO-ENABLED <<<");
+      }
+      
+      // Apply keyboard movement (same step size as local keyboard)
+      motor2_target = constrain(motor2_target + base * STEP_SIZE, MOTOR_MIN, MOTOR_MAX);
+      motor3_target = constrain(motor3_target + shoulder * STEP_SIZE, MOTOR_MIN, MOTOR_MAX);
+      motor1_target = constrain(motor1_target + elbow * STEP_SIZE, MOTOR_MIN, MOTOR_MAX);
+      
+      // Debug occasionally
+      static int kbCount = 0;
+      if (++kbCount % 20 == 0) {
+        Serial.print("KB: base="); Serial.print(base);
+        Serial.print(" shoulder="); Serial.print(shoulder);
+        Serial.print(" elbow="); Serial.println(elbow);
+      }
+    }
   }
 }
 

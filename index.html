@@ -1,6 +1,7 @@
 <html>
   <head>
     <title>VR Robot Arm Control</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script type="importmap">
       {
@@ -37,6 +38,28 @@
       #enableButton.active { background: #FF9800; }
       #stopButton { background: #f44336; color: white; font-weight: bold; }
       #homeButton { background: #9E9E9E; color: white; }
+      #keyboardControls {
+        background: rgba(0,0,0,0.8);
+        color: white;
+        padding: 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        margin-top: 10px;
+      }
+      #keyboardControls h4 { margin: 0 0 8px 0; color: #4CAF50; }
+      .key-row { display: flex; gap: 4px; justify-content: center; margin: 4px 0; }
+      .key {
+        background: #333;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 8px 12px;
+        min-width: 36px;
+        text-align: center;
+        font-family: monospace;
+        font-weight: bold;
+      }
+      .key.active { background: #4CAF50; border-color: #4CAF50; }
+      .key-label { font-size: 10px; color: #888; margin-top: 4px; text-align: center; }
       #status {
         background: rgba(0,0,0,0.7);
         color: #0f0;
@@ -50,11 +73,28 @@
 
   <body>
     <div id="controls">
-      <button id="serialButton">🔌 Connect Teensy</button>
-      <button id="enableButton">▶️ Enable VR Control</button>
-      <button id="stopButton">🛑 EMERGENCY STOP</button>
-      <button id="homeButton">🏠 Home Position</button>
+      <button id="serialButton">Connect Teensy</button>
+      <button id="enableButton">Enable VR Control</button>
+      <button id="stopButton">EMERGENCY STOP</button>
+      <button id="homeButton">Home Position</button>
       <div id="status">Status: Disconnected</div>
+      <div id="keyboardControls">
+        <h4>Keyboard Control</h4>
+        <div class="key-row">
+          <div class="key" id="key-w">W</div>
+        </div>
+        <div class="key-row">
+          <div class="key" id="key-q">Q</div>
+          <div class="key" id="key-s">S</div>
+          <div class="key" id="key-e">E</div>
+        </div>
+        <div class="key-row">
+          <div class="key" id="key-a">A</div>
+          <div class="key" id="key-d">D</div>
+        </div>
+        <div class="key-label">Q/E: Base | W/S: Shoulder | A/D: Elbow</div>
+        <div class="key-label" style="color: #f44336;">SPACE: Emergency Stop</div>
+      </div>
     </div>
 
     <pre id="pos"></pre>
@@ -65,6 +105,7 @@
         sendEnable, 
         sendStop, 
         sendHome,
+        sendKeyboardMove,
         isVrControlActive 
       } from './xrMechanicalControllerInput.js';
 
@@ -85,11 +126,11 @@
         const btn = document.getElementById('enableButton');
         if (vrEnabled) {
           btn.classList.add('active');
-          btn.textContent = '⏸️ Disable VR Control';
+          btn.textContent = 'Disable VR Control';
           document.getElementById('status').textContent = 'Status: VR CONTROL ACTIVE';
         } else {
           btn.classList.remove('active');
-          btn.textContent = '▶️ Enable VR Control';
+          btn.textContent = 'Enable VR Control';
           document.getElementById('status').textContent = 'Status: Connected - Paused';
         }
       });
@@ -99,7 +140,7 @@
         sendStop();
         vrEnabled = false;
         document.getElementById('enableButton').classList.remove('active');
-        document.getElementById('enableButton').textContent = '▶️ Enable VR Control';
+        document.getElementById('enableButton').textContent = 'Enable VR Control';
         document.getElementById('status').textContent = 'Status: STOPPED';
       });
 
@@ -109,13 +150,74 @@
         document.getElementById('status').textContent = 'Status: Homing...';
       });
 
-      // Keyboard shortcuts (when not in VR)
+      // Keyboard control state
+      const keysPressed = new Set();
+      const keyMoveInterval = 50; // Send moves at 20Hz
+      let keyboardInterval = null;
+
+      function updateKeyVisual(key, active) {
+        const el = document.getElementById(`key-${key.toLowerCase()}`);
+        if (el) {
+          if (active) el.classList.add('active');
+          else el.classList.remove('active');
+        }
+      }
+
+      function processKeyboardInput() {
+        // Calculate movement based on keys pressed
+        let base = 0, shoulder = 0, elbow = 0;
+        
+        if (keysPressed.has('q')) base -= 1;
+        if (keysPressed.has('e')) base += 1;
+        if (keysPressed.has('w')) shoulder += 1;
+        if (keysPressed.has('s')) shoulder -= 1;
+        if (keysPressed.has('a')) elbow -= 1;
+        if (keysPressed.has('d')) elbow += 1;
+        
+        if (base !== 0 || shoulder !== 0 || elbow !== 0) {
+          sendKeyboardMove(base, shoulder, elbow);
+        }
+      }
+
       document.addEventListener('keydown', (e) => {
+        const key = e.key.toLowerCase();
+        
+        // Emergency stop
         if (e.code === 'Space') {
           e.preventDefault();
           sendStop();
           vrEnabled = false;
+          document.getElementById('enableButton').classList.remove('active');
+          document.getElementById('enableButton').textContent = 'Enable VR Control';
           document.getElementById('status').textContent = 'Status: STOPPED';
+          return;
+        }
+        
+        // Movement keys
+        if (['q', 'e', 'w', 's', 'a', 'd'].includes(key) && !keysPressed.has(key)) {
+          e.preventDefault();
+          keysPressed.add(key);
+          updateKeyVisual(key, true);
+          
+          // Start interval if not running
+          if (!keyboardInterval) {
+            keyboardInterval = setInterval(processKeyboardInput, keyMoveInterval);
+          }
+        }
+      });
+
+      document.addEventListener('keyup', (e) => {
+        const key = e.key.toLowerCase();
+        
+        if (['q', 'e', 'w', 's', 'a', 'd'].includes(key)) {
+          keysPressed.delete(key);
+          updateKeyVisual(key, false);
+          
+          // Stop interval if no keys pressed
+          if (keysPressed.size === 0 && keyboardInterval) {
+            clearInterval(keyboardInterval);
+            keyboardInterval = null;
+          }
         }
       });
     </script>
