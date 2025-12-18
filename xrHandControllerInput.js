@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Vector3Damper } from './vectorDamper.js';
 import { XrGestureTracker } from './xrGestureTracker.js';
+import { sendPosition, isVrControlActive, getControlHand } from './xrMechanicalControllerInput.js';
 
 const DamperTimeS = 0.15 ;
 
@@ -180,5 +181,14 @@ export class XrHandControllerInput{
         this._pointerDirection.copy(this._pointerDirectionDamper.add(this.context.elapsedTime, __originWDir)) ;
 
         this.pointerActive = this.gesture.thumpIndexDistance < 0.05 && this.gesture.palmFacing == 'forward' ;
+
+        // Send position to robot arm if this is the control hand and VR is active
+        if (this.handSide === getControlHand() && isVrControlActive()) {
+            sendPosition(
+                this._worldPosition.x,
+                this._worldPosition.y,
+                this._worldPosition.z
+            );
+        }
     }
 }

@@ -1,19 +1,123 @@
 <html>
-<head>
-    <title>Three.js WebXR Hand Tracking</title>
+  <head>
+    <title>VR Robot Arm Control</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script type="importmap">
-        {
-          "imports": {
-            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
-          }
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
         }
-      </script>
-      <link rel="stylesheet" href="default.css">
-      <script type="module" src="./default.js"></script>  
-</head>
-<body>
-</body>
-<pre id="pos"></pre>
+      }
+    </script>
+    <link rel="stylesheet" href="default.css" />
+    <script type="module" src="./default.js"></script>
+    <style>
+      #controls {
+        position: absolute;
+        z-index: 999;
+        top: 10px;
+        left: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-family: Arial, sans-serif;
+      }
+      #controls button {
+        padding: 10px 16px;
+        font-size: 14px;
+        cursor: pointer;
+        border: none;
+        border-radius: 6px;
+        min-width: 160px;
+      }
+      #serialButton { background: #4CAF50; color: white; }
+      #serialButton.connected { background: #2E7D32; }
+      #enableButton { background: #2196F3; color: white; }
+      #enableButton.active { background: #FF9800; }
+      #stopButton { background: #f44336; color: white; font-weight: bold; }
+      #homeButton { background: #9E9E9E; color: white; }
+      #status {
+        background: rgba(0,0,0,0.7);
+        color: #0f0;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-family: monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="controls">
+      <button id="serialButton">🔌 Connect Teensy</button>
+      <button id="enableButton">▶️ Enable VR Control</button>
+      <button id="stopButton">🛑 EMERGENCY STOP</button>
+      <button id="homeButton">🏠 Home Position</button>
+      <div id="status">Status: Disconnected</div>
+    </div>
+
+    <pre id="pos"></pre>
+
+    <script type="module">
+      import { 
+        connectTeensySerial, 
+        sendEnable, 
+        sendStop, 
+        sendHome,
+        isVrControlActive 
+      } from './xrMechanicalControllerInput.js';
+
+      let vrEnabled = false;
+
+      // Connect button
+      document.getElementById('serialButton').addEventListener('click', async () => {
+        await connectTeensySerial();
+        document.getElementById('serialButton').classList.add('connected');
+        document.getElementById('serialButton').textContent = '✓ Connected';
+        document.getElementById('status').textContent = 'Status: Connected - Press Enable';
+      });
+
+      // Enable/Disable VR control
+      document.getElementById('enableButton').addEventListener('click', () => {
+        vrEnabled = !vrEnabled;
+        sendEnable(vrEnabled);
+        const btn = document.getElementById('enableButton');
+        if (vrEnabled) {
+          btn.classList.add('active');
+          btn.textContent = '⏸️ Disable VR Control';
+          document.getElementById('status').textContent = 'Status: VR CONTROL ACTIVE';
+        } else {
+          btn.classList.remove('active');
+          btn.textContent = '▶️ Enable VR Control';
+          document.getElementById('status').textContent = 'Status: Connected - Paused';
+        }
+      });
+
+      // Emergency stop
+      document.getElementById('stopButton').addEventListener('click', () => {
+        sendStop();
+        vrEnabled = false;
+        document.getElementById('enableButton').classList.remove('active');
+        document.getElementById('enableButton').textContent = '▶️ Enable VR Control';
+        document.getElementById('status').textContent = 'Status: STOPPED';
+      });
+
+      // Home position
+      document.getElementById('homeButton').addEventListener('click', () => {
+        sendHome();
+        document.getElementById('status').textContent = 'Status: Homing...';
+      });
+
+      // Keyboard shortcuts (when not in VR)
+      document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+          e.preventDefault();
+          sendStop();
+          vrEnabled = false;
+          document.getElementById('status').textContent = 'Status: STOPPED';
+        }
+      });
+    </script>
+  </body>
 </html>

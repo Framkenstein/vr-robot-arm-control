@@ -1,15 +1,21 @@
 {
   "name": "threejs-webxr-hands-example",
   "version": "1.0.0",
-  "description": "",
+  "description": "VR Robot Arm Control",
   "main": "index.js",
   "scripts": {
     "serve": "http-server -o",
-    "serve-ssl": "http-server -S -C cert.pem"
+    "serve-ssl": "http-server -S -C cert.pem",
+    "relay": "node relay-server.js",
+    "start": "concurrently \"npm run serve-ssl\" \"npm run relay\""
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "http-server": "^14.1.1"
+    "http-server": "^14.1.1",
+    "serialport": "^12.0.0",
+    "ws": "^8.14.0",
+    "@serialport/parser-readline": "^12.0.0",
+    "concurrently": "^8.2.0"
   }
 }
