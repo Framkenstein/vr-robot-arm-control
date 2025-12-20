@@ -1,6 +1,6 @@
 # VR Robot Arm Control
 
-Control a 3-motor robot arm using an Oculus Quest 2 VR headset. Move your hand in VR and the robot arm follows!
+Control a 3-motor robot arm using an Oculus Quest 2 VR headset or keyboard - locally or over the internet!
 
 ## Hardware
 
@@ -8,15 +8,16 @@ Control a 3-motor robot arm using an Oculus Quest 2 VR headset. Move your hand i
 - **Teensy 4.1** - Microcontroller
 - **ODrive Motor Controllers** - 3x ODrive controllers (CAN bus, Node IDs 1, 2, 3)
 - **3 Motors** - With 50:1 gear ratio
-  - Base rotation (Q/E keyboard)
-  - Shoulder up/down (A/D keyboard)
-  - Elbow up/down (W/S keyboard)
+  - Motor 2: Base rotation
+  - Motor 3: Shoulder
+  - Motor 1: Elbow
 
 ## Software Requirements
 
 - Node.js
 - Arduino IDE with Teensyduino
 - OpenSSL (for generating certificates)
+- ngrok (for internet access)
 
 ## Quick Start
 
@@ -38,31 +39,22 @@ npm install
 2. Select Teensy 4.1 board
 3. Upload to Teensy
 
-### 4. Start the Servers
+### 4. Start the Server
 
-Open **two PowerShell windows** in the project folder:
-
-**Window 1 - Relay Server:**
 ```powershell
-node relay-server.js
+node server-combined.js
 ```
 
-**Window 2 - Web Server:**
+### 5. Connect
+
+**Local (same network):**
+- Quest or PC browser: `https://<YOUR_PC_IP>:8080`
+
+**Internet (anywhere in the world):**
 ```powershell
-npm run serve-ssl
+ngrok http https://localhost:8080
 ```
-
-### 5. Connect from Quest
-
-1. Put on Quest 2 headset
-2. Open browser and go to: `https://<YOUR_PC_IP>:8080`
-   - Accept the self-signed certificate warning
-3. Click "Enter VR"
-
-### 6. Enable the Robot
-
-In the relay server PowerShell window:
-1. Type `x` and press Enter to enable motors
+Then use the ngrok URL (e.g., `https://abc123.ngrok.io`)
 
 ## Controls
 
@@ -71,23 +63,28 @@ In the relay server PowerShell window:
 - **Up/Down** - Move shoulder
 - **Forward/Back** - Move elbow
 
-The arm only moves while holding the trigger. Release to stop. Position accumulates between grabs.
+### Web Keyboard Control
+- **Q/E** - Base rotation
+- **W/S** - Shoulder up/down
+- **A/D** - Elbow up/down
+- **SPACE** - Emergency stop
 
-### Keyboard Commands (in relay server terminal)
-- `x` - Enable/disable motors (MUST DO FIRST)
-- `Space` or `Enter` or `s` - **EMERGENCY STOP**
+### Server Terminal Commands
+- `x` - Toggle motors on/off
+- `Space` or `s` - Emergency stop
 - `0` - Return to zero position
 - `p` - Print status
 
-### Direct Keyboard Control (when VR mode off)
-- `Q/E` - Base rotation
-- `A/D` - Shoulder up/down
-- `W/S` - Elbow up/down
+## Features
+
+- **Auto-enable** - Motors activate on first command (no need to type `x`)
+- **Auto-reconnect** - Serial reconnects automatically if disconnected
+- **Dual control** - VR and keyboard work simultaneously
+- **Internet control** - Anyone with the ngrok URL can control the robot
 
 ## Safety Features
 
-- Motors disabled on startup - must type `x` to enable
-- Emergency stop via spacebar, Enter, or `s`
+- Emergency stop via spacebar
 - Motor position limits: ±25 turns
 - Smooth acceleration (no sudden movements)
 - 60-second timeout auto-disable
@@ -97,46 +94,39 @@ The arm only moves while holding the trigger. Release to stop. Position accumula
 Edit `arduino/vr_robot_arm_control.ino`:
 
 ```cpp
-// Sensitivity: motor turns per meter of VR hand movement
-const float VR_SENSITIVITY = 10.0f;
-
-// Motor position limits (turns)
-const float MOTOR_MIN = -25.0f;
+const float VR_SENSITIVITY = 10.0f;  // Motor turns per meter of VR movement
+const float MOTOR_MIN = -25.0f;      // Position limits (turns)
 const float MOTOR_MAX = 25.0f;
-
-// Smoothing (0.0-1.0, higher = faster response)
-const float SMOOTHING = 0.15f;
+const float SMOOTHING = 0.15f;       // 0.0-1.0, higher = faster response
+const float STEP_SIZE = 0.5f;        // Keyboard step size (turns)
 ```
-
-## Troubleshooting
-
-### Quest won't connect
-- Make sure Quest and PC are on the same WiFi network
-- Check that both servers are running
-- Accept the SSL certificate warning in Quest browser
-
-### Motors not responding
-- Type `x` in relay terminal to enable
-- Check Teensy is connected (COM port in relay-server.js)
-- Verify ODrive controllers are powered and detected
-
-### Wrong motor directions
-- Edit the signs in `processVrPosition()` in the Arduino code
 
 ## File Structure
 
 ```
 ├── arduino/
 │   └── vr_robot_arm_control.ino  # Teensy firmware
-├── relay-server.js               # WebSocket to Serial bridge
-├── xrMechanicalControllerInput.js # VR controller handling
+├── server-combined.js            # Combined web + WebSocket server
+├── relay-server.js               # Legacy separate relay server
+├── xrMechanicalControllerInput.js # VR/keyboard controller handling
 ├── index.html                    # Web interface
 ├── cert.pem / key.pem           # SSL certificates
 └── package.json                  # Node dependencies
 ```
 
-## Network Ports
+## Troubleshooting
 
-- **8080** - HTTPS web server
-- **8081** - Secure WebSocket relay server
-- **COM4** - Teensy serial (250000 baud)
+### Quest won't connect
+- Make sure Quest and PC are on the same WiFi network
+- Accept the SSL certificate warning in Quest browser
+
+### Keyboard not working
+- Make sure you're focused on the webpage (click on it)
+- Check browser console for connection errors
+
+### Serial keeps disconnecting
+- Likely voltage spikes from motors - add a capacitor (100-470µF) to Teensy power
+- Server will auto-reconnect within 2 seconds
+
+### Wrong motor directions
+- Edit the signs in `processVrPosition()` in the Arduino code
