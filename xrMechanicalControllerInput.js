@@ -250,6 +250,7 @@ export class XrMechanicalControllerInput {
         
         // For relative movement - capture position when trigger pressed
         this._triggerWasPressed = false;
+        this._buttonBWasPressed = false;  // For e-stop debounce
         this._grabStartPos = new THREE.Vector3();
         // Accumulated robot arm position (persists between grabs)
         this._armPosition = { x: 0, y: 0, z: 0 };
@@ -376,18 +377,34 @@ export class XrMechanicalControllerInput {
         __wristOffset.applyQuaternion(this._worldRotation);
         this._worldPosition.add(__wristOffset);
 
+        // EMERGENCY STOP on Button B
+        if (this._handSide === controlHand && isConnected && this.buttonB) {
+            if (!this._buttonBWasPressed) {
+                this._buttonBWasPressed = true;
+                sendStop();
+                console.log('!!! EMERGENCY STOP (Button B) !!!');
+                // Reset arm position tracking
+                this._armPosition = { x: 0, y: 0, z: 0 };
+                this._triggerWasPressed = false;
+            }
+        } else {
+            this._buttonBWasPressed = false;
+        }
+
         // Send position to robot arm if this is the control hand AND trigger is held
-        // Uses RELATIVE movement - movement accumulates between grabs
+        // Uses RELATIVE movement - resets home on each grab
         if (this._handSide === controlHand && isConnected) {
             if (this.select) {
                 if (!this._triggerWasPressed) {
-                    // Just pressed trigger - capture start positions
+                    // Just pressed trigger - reset everything to zero
                     this._grabStartPos.copy(this._worldPosition);
-                    this._armStartPos.x = this._armPosition.x;
-                    this._armStartPos.y = this._armPosition.y;
-                    this._armStartPos.z = this._armPosition.z;
+                    // Reset arm position to zero - movement starts fresh each grab
+                    this._armPosition = { x: 0, y: 0, z: 0 };
+                    this._armStartPos = { x: 0, y: 0, z: 0 };
                     this._triggerWasPressed = true;
-                    console.log('Grabbed - arm at:', this._armPosition.x.toFixed(3), this._armPosition.y.toFixed(3), this._armPosition.z.toFixed(3));
+                    // Send HOME to Arduino to zero the motor targets
+                    sendHome();
+                    console.log('Grabbed - HOME sent, starting fresh');
                 }
                 
                 // Calculate delta from grab start position

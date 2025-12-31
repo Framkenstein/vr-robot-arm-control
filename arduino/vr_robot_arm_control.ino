@@ -72,11 +72,15 @@ const float FOREARM = 15.0f;       // Length 3 - elbow to tip
 // See calibration variables: base_ratio, shoulder_ratio, elbow_ratio
 
 // VR to real-world scale (meters to inches)
-const float VR_SCALE = 39.37f * 2.0f;  // 1m VR = ~80 inches real movement
+const float VR_SCALE = 10.0f;  // 1m VR = 10 inches arm tip movement (conservative)
 
 // Motor position limits (turns) - SAFETY LIMITS
-const float MOTOR_MIN = -25.0f;
-const float MOTOR_MAX = 25.0f;
+// !!! TEST MODE: Strict limits while debugging IK !!!
+const bool IK_TEST_MODE = true;
+const float TEST_LIMIT = 3.2f;  // ±22.5 degrees arm = 45 deg total range
+
+const float MOTOR_MIN = IK_TEST_MODE ? -TEST_LIMIT : -25.0f;
+const float MOTOR_MAX = IK_TEST_MODE ? TEST_LIMIT : 25.0f;
 
 // Smoothing factor (0.0-1.0, lower = smoother but slower)
 const float SMOOTHING = 0.15f;  // Faster response
@@ -92,6 +96,18 @@ float motor2_position = 0.0f;
 float motor3_target = 0.0f;  // Target = current position (no movement)
 float motor1_target = 0.0f;
 float motor2_target = 0.0f;
+
+// Encoder offsets - the ODrive encoder value when we "homed"
+// Commands sent to ODrive = software_position + offset
+float motor1_offset = 0.0f;
+float motor2_offset = 0.0f;
+float motor3_offset = 0.0f;
+
+// IK home angles - calculated for position (0, 20, 20) inches
+// These get set properly when HOME is pressed
+float home_baseAngle = 0.0f;
+float home_shoulderAngle = 71.7f;  // Matches IK at home position
+float home_elbowAngle = 74.4f;     // Matches IK at home position
 
 bool vr_enabled = false;
 bool safety_enabled = false;
@@ -182,37 +198,46 @@ bool calculateIK(float x, float y, float z, float &baseAngle, float &shoulderAng
 }
 
 // ============ VR POSITION PROCESSING ============
+// IK MODE with TEST_LIMIT safety (max ±0.25 turns)
 void processVrPosition(float deltaX, float deltaY, float deltaZ) {
   // Convert VR coordinates (meters) to arm coordinates (inches)
-  // VR: x=right, y=up, z=back (towards user)
-  // Arm: x=right, y=up, z=forward
+  // JavaScript sends (armPos.z, armPos.y, armPos.x) so we receive:
+  //   deltaX = VR forward/back, deltaY = VR up/down, deltaZ = VR left/right
+  // Arm IK expects: x=left/right, y=up/down, z=forward
   
-  float targetX = deltaX * VR_SCALE;           // Left/right
-  float targetY = deltaY * VR_SCALE + 20.0f;   // Up/down (offset to reasonable height)
-  float targetZ = -deltaZ * VR_SCALE + 20.0f;  // Forward (flip Z, offset forward)
+  float targetX = deltaZ * VR_SCALE;           // Left/right (from VR X, sent as Z)
+  float targetY = deltaY * VR_SCALE + 20.0f;   // Up/down (VR Y)
+  float targetZ = deltaX * VR_SCALE + 20.0f;   // Forward (from VR Z, sent as X)
   
   float baseAngle, shoulderAngle, elbowAngle;
   
   if (calculateIK(targetX, targetY, targetZ, baseAngle, shoulderAngle, elbowAngle)) {
-    // Convert angles to motor turns using calibrated ratios
-    // Motor mapping (verified): Q/E=Base, A/D=Shoulder, W/S=Elbow
-    // motor2_target -> ODrive 2 -> Q/E -> Base rotation
-    // motor1_target -> ODrive 1 -> A/D -> Shoulder
-    // motor3_target -> ODrive 3 -> W/S -> Elbow
-    motor2_target = constrain(baseAngle * motor_ratio, MOTOR_MIN, MOTOR_MAX);      // Base (Q/E)
-    motor1_target = constrain(shoulderAngle * motor_ratio, MOTOR_MIN, MOTOR_MAX);  // Shoulder (A/D)
-    motor3_target = constrain(elbowAngle * motor_ratio, MOTOR_MIN, MOTOR_MAX);     // Elbow (W/S)
+    // Convert to RELATIVE angles (difference from home position)
+    float relBase = baseAngle - home_baseAngle;
+    float relShoulder = shoulderAngle - home_shoulderAngle;
+    float relElbow = elbowAngle - home_elbowAngle;
     
-    // Debug output occasionally
+    // Convert relative angles to motor turns
+    // Mapping must match keyboard: base=motor2, shoulder=motor1, elbow=motor3
+    float new_motor2 = relBase * motor_ratio;       // Base -> motor2 (Q/E)
+    float new_motor1 = relShoulder * motor_ratio;   // Shoulder -> motor1 (A/D)
+    float new_motor3 = relElbow * motor_ratio;      // Elbow -> motor3 (W/S)
+    
+    // SAFETY: Constrain to test limits
+    motor1_target = constrain(new_motor1, MOTOR_MIN, MOTOR_MAX);  // Shoulder
+    motor2_target = constrain(new_motor2, MOTOR_MIN, MOTOR_MAX);  // Base
+    motor3_target = constrain(new_motor3, MOTOR_MIN, MOTOR_MAX);  // Elbow
+    
+    // Debug output every time during testing
     static int ikCount = 0;
-    if (++ikCount % 100 == 0) {
-      Serial.print("IK: target(");
-      Serial.print(targetX, 1); Serial.print(", ");
-      Serial.print(targetY, 1); Serial.print(", ");
-      Serial.print(targetZ, 1); Serial.print(") -> angles(");
-      Serial.print(baseAngle, 1); Serial.print(", ");
-      Serial.print(shoulderAngle, 1); Serial.print(", ");
-      Serial.print(elbowAngle, 1); Serial.println(")");
+    if (++ikCount % 20 == 0) {
+      Serial.print("IK rel(");
+      Serial.print(relBase, 1); Serial.print(", ");
+      Serial.print(relShoulder, 1); Serial.print(", ");
+      Serial.print(relElbow, 1); Serial.print(") -> M1:");
+      Serial.print(motor1_target, 2); Serial.print(" M2:");
+      Serial.print(motor2_target, 2); Serial.print(" M3:");
+      Serial.println(motor3_target, 2);
     }
   }
   
@@ -261,12 +286,35 @@ void processSerialCommand(String cmd) {
     emergencyStop();
   }
   else if (cmd == "HOME") {
-    if (safety_enabled) {
-      motor3_target = motor1_target = motor2_target = 0;
-      motor3_position = motor1_position = motor2_position = 0;
-      sendMotorPositions();
-      Serial.println("HOMED");
+    // Store current encoder positions as offsets
+    // This makes current physical position = software 0
+    if (odrv1_user_data.received_feedback) {
+      motor1_offset = odrv1_user_data.last_feedback.Pos_Estimate;
     }
+    if (odrv2_user_data.received_feedback) {
+      motor2_offset = odrv2_user_data.last_feedback.Pos_Estimate;
+    }
+    if (odrv3_user_data.received_feedback) {
+      motor3_offset = odrv3_user_data.last_feedback.Pos_Estimate;
+    }
+    // Zero software positions
+    motor1_position = motor1_target = 0;
+    motor2_position = motor2_target = 0;
+    motor3_position = motor3_target = 0;
+    
+    // Capture IK home angles from current VR position (assume 0,0,0)
+    // This makes IK output relative to wherever the arm is now
+    float tempBase, tempShoulder, tempElbow;
+    if (calculateIK(0, 20.0f, 20.0f, tempBase, tempShoulder, tempElbow)) {
+      home_baseAngle = tempBase;
+      home_shoulderAngle = tempShoulder;
+      home_elbowAngle = tempElbow;
+    }
+    
+    Serial.print("HOME SET - IK home angles: ");
+    Serial.print(home_baseAngle, 1); Serial.print(", ");
+    Serial.print(home_shoulderAngle, 1); Serial.print(", ");
+    Serial.println(home_elbowAngle, 1);
   }
   else if (cmd == "STATUS") {
     printStatus();
@@ -287,18 +335,8 @@ void processSerialCommand(String cmd) {
       // Auto-enable on first keyboard command
       if (!safety_enabled) {
         safety_enabled = true;
-        // IMPORTANT: Read current encoder positions from ODrives
-        // This syncs software state with actual motor positions - NO JUMP
-        if (odrv1_user_data.received_feedback) {
-          motor1_position = motor1_target = odrv1_user_data.last_feedback.Pos_Estimate;
-        }
-        if (odrv2_user_data.received_feedback) {
-          motor2_position = motor2_target = odrv2_user_data.last_feedback.Pos_Estimate;
-        }
-        if (odrv3_user_data.received_feedback) {
-          motor3_position = motor3_target = odrv3_user_data.last_feedback.Pos_Estimate;
-        }
-        Serial.println(">>> AUTO-ENABLED (synced to current positions) <<<");
+        // Just enable - don't change positions (HOME already set them)
+        Serial.println(">>> AUTO-ENABLED <<<");
       }
       
       // Apply keyboard movement (same step size as local keyboard)
@@ -325,19 +363,20 @@ void emergencyStop() {
   motor1_target = motor1_position;
   motor2_target = motor2_position;
   
-  // Command motors to hold current position
-  if (odrv3_user_data.is_active) odrv3.setPosition(motor3_position);
-  if (odrv1_user_data.is_active) odrv1.setPosition(motor1_position);
-  if (odrv2_user_data.is_active) odrv2.setPosition(motor2_position);
+  // Command motors to hold current position (with offset)
+  if (odrv3_user_data.is_active) odrv3.setPosition(motor3_position + motor3_offset);
+  if (odrv1_user_data.is_active) odrv1.setPosition(motor1_position + motor1_offset);
+  if (odrv2_user_data.is_active) odrv2.setPosition(motor2_position + motor2_offset);
   
   safety_enabled = false;
   vr_enabled = false;
 }
 
 void sendMotorPositions() {
-  if (odrv3_user_data.is_active) odrv3.setPosition(motor3_position);
-  if (odrv1_user_data.is_active) odrv1.setPosition(motor1_position);
-  if (odrv2_user_data.is_active) odrv2.setPosition(motor2_position);
+  // Send position + offset to ODrives (converts software coords to encoder coords)
+  if (odrv3_user_data.is_active) odrv3.setPosition(motor3_position + motor3_offset);
+  if (odrv1_user_data.is_active) odrv1.setPosition(motor1_position + motor1_offset);
+  if (odrv2_user_data.is_active) odrv2.setPosition(motor2_position + motor2_offset);
 }
 
 void printStatus() {
