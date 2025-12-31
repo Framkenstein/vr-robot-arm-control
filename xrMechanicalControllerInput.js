@@ -189,6 +189,14 @@ export function sendHome() {
 }
 
 /**
+ * Send calibrate command (toggle calibration mode)
+ */
+export function sendCalibrate() {
+  sendToRelay({ type: 'calibrate' });
+  console.log('CALIBRATE command sent');
+}
+
+/**
  * Send keyboard movement command
  * @param {number} base - Base rotation (-1, 0, 1)
  * @param {number} shoulder - Shoulder movement (-1, 0, 1)

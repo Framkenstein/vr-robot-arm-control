@@ -238,6 +238,11 @@ function handleMessage(msg, ws) {
       sendToTeensy('HOME');
       break;
 
+    case 'calibrate':
+      console.log('\n🔧 CALIBRATE');
+      sendToTeensy('c');
+      break;
+
     case 'keyboard':
       // Keyboard control: K:base,shoulder,elbow (-1, 0, or 1 for each)
       console.log(`⌨️ Keyboard received: base=${msg.base}, shoulder=${msg.shoulder}, elbow=${msg.elbow}`);

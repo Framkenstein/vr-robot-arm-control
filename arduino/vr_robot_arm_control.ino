@@ -63,9 +63,16 @@ ODriveUserData odrv3_user_data;
 ODriveUserData odrv1_user_data;
 ODriveUserData odrv2_user_data;
 
-// ============ VR CONTROL SETTINGS ============
-// Sensitivity: motor turns per meter of VR hand movement
-const float VR_SENSITIVITY = 10.0f;
+// ============ ARM GEOMETRY (inches) ============
+const float BASE_HEIGHT = 5.5f;    // Length 1 - base to shoulder
+const float UPPER_ARM = 16.0f;     // Length 2 - shoulder to elbow
+const float FOREARM = 15.0f;       // Length 3 - elbow to tip
+
+// NOTE: Gear ratios are now calibrated at runtime
+// See calibration variables: base_ratio, shoulder_ratio, elbow_ratio
+
+// VR to real-world scale (meters to inches)
+const float VR_SCALE = 39.37f * 2.0f;  // 1m VR = ~80 inches real movement
 
 // Motor position limits (turns) - SAFETY LIMITS
 const float MOTOR_MIN = -25.0f;
@@ -89,6 +96,14 @@ float motor2_target = 0.0f;
 bool vr_enabled = false;
 bool safety_enabled = false;
 const float STEP_SIZE = 0.5f;
+
+// Calibration mode
+bool calibrating = false;
+float calibration_start = 0.0f;
+
+// Gear ratio (turns per degree) - same for all motors
+// Calibrated: 25.49 turns = 180 degrees
+float motor_ratio = 0.141618f;  // turns per degree
 unsigned long last_command_time = 0;
 const unsigned long COMMAND_TIMEOUT = 60000;  // 60 second timeout (no rush)
 
@@ -115,16 +130,91 @@ void onCanMessage(const CanMsg& msg) {
   }
 }
 
+// ============ INVERSE KINEMATICS ============
+// Calculates joint angles for desired tip position
+// Motor 1 (Q/E) = Base rotation
+// Motor 2 (A/D) = Shoulder joint
+// Motor 3 (W/S) = Elbow joint
+
+bool calculateIK(float x, float y, float z, float &baseAngle, float &shoulderAngle, float &elbowAngle) {
+  // x = left/right, y = up/down, z = forward/back
+  // All units in inches
+  
+  // Base rotation (around Y axis)
+  baseAngle = atan2(x, z) * 180.0f / PI;
+  
+  // Distance in horizontal plane from base
+  float r = sqrt(x * x + z * z);
+  
+  // Height relative to shoulder joint
+  float h = y - BASE_HEIGHT;
+  
+  // Distance from shoulder to target
+  float d = sqrt(r * r + h * h);
+  
+  // Check if target is reachable
+  float maxReach = UPPER_ARM + FOREARM - 0.5f;  // Small margin
+  float minReach = abs(UPPER_ARM - FOREARM) + 0.5f;
+  
+  if (d > maxReach || d < minReach) {
+    // Target out of reach - clamp to reachable distance
+    if (d > maxReach) d = maxReach;
+    if (d < minReach) d = minReach;
+  }
+  
+  // Law of cosines for elbow angle
+  float cosElbow = (UPPER_ARM * UPPER_ARM + FOREARM * FOREARM - d * d) / (2.0f * UPPER_ARM * FOREARM);
+  cosElbow = constrain(cosElbow, -1.0f, 1.0f);
+  elbowAngle = acos(cosElbow) * 180.0f / PI;
+  
+  // Convert to elbow bend (180 = straight, less = bent)
+  elbowAngle = 180.0f - elbowAngle;
+  
+  // Shoulder angle
+  float alpha = atan2(h, r);  // Angle to target from horizontal
+  float cosGamma = (UPPER_ARM * UPPER_ARM + d * d - FOREARM * FOREARM) / (2.0f * UPPER_ARM * d);
+  cosGamma = constrain(cosGamma, -1.0f, 1.0f);
+  float gamma = acos(cosGamma);
+  
+  shoulderAngle = (alpha + gamma) * 180.0f / PI;
+  
+  return true;
+}
+
 // ============ VR POSITION PROCESSING ============
 void processVrPosition(float deltaX, float deltaY, float deltaZ) {
-  // Motor mapping (based on keyboard controls):
-  // motor2 (Q/E) = base rotation
-  // motor1 (A/D) = shoulder up/down
-  // motor3 (W/S) = elbow up/down
+  // Convert VR coordinates (meters) to arm coordinates (inches)
+  // VR: x=right, y=up, z=back (towards user)
+  // Arm: x=right, y=up, z=forward
   
-  motor2_target = constrain(deltaX * VR_SENSITIVITY, MOTOR_MIN, MOTOR_MAX);   // Left/right -> base (Q/E)
-  motor1_target = constrain(-deltaY * VR_SENSITIVITY, MOTOR_MIN, MOTOR_MAX);  // Up/down -> shoulder (flipped)
-  motor3_target = constrain(-deltaZ * VR_SENSITIVITY, MOTOR_MIN, MOTOR_MAX);  // Forward/back -> elbow (flipped)
+  float targetX = deltaX * VR_SCALE;           // Left/right
+  float targetY = deltaY * VR_SCALE + 20.0f;   // Up/down (offset to reasonable height)
+  float targetZ = -deltaZ * VR_SCALE + 20.0f;  // Forward (flip Z, offset forward)
+  
+  float baseAngle, shoulderAngle, elbowAngle;
+  
+  if (calculateIK(targetX, targetY, targetZ, baseAngle, shoulderAngle, elbowAngle)) {
+    // Convert angles to motor turns using calibrated ratios
+    // Motor mapping (verified): Q/E=Base, A/D=Shoulder, W/S=Elbow
+    // motor2_target -> ODrive 2 -> Q/E -> Base rotation
+    // motor1_target -> ODrive 1 -> A/D -> Shoulder
+    // motor3_target -> ODrive 3 -> W/S -> Elbow
+    motor2_target = constrain(baseAngle * motor_ratio, MOTOR_MIN, MOTOR_MAX);      // Base (Q/E)
+    motor1_target = constrain(shoulderAngle * motor_ratio, MOTOR_MIN, MOTOR_MAX);  // Shoulder (A/D)
+    motor3_target = constrain(elbowAngle * motor_ratio, MOTOR_MIN, MOTOR_MAX);     // Elbow (W/S)
+    
+    // Debug output occasionally
+    static int ikCount = 0;
+    if (++ikCount % 100 == 0) {
+      Serial.print("IK: target(");
+      Serial.print(targetX, 1); Serial.print(", ");
+      Serial.print(targetY, 1); Serial.print(", ");
+      Serial.print(targetZ, 1); Serial.print(") -> angles(");
+      Serial.print(baseAngle, 1); Serial.print(", ");
+      Serial.print(shoulderAngle, 1); Serial.print(", ");
+      Serial.print(elbowAngle, 1); Serial.println(")");
+    }
+  }
   
   last_command_time = millis();
 }
@@ -197,7 +287,18 @@ void processSerialCommand(String cmd) {
       // Auto-enable on first keyboard command
       if (!safety_enabled) {
         safety_enabled = true;
-        Serial.println(">>> AUTO-ENABLED <<<");
+        // IMPORTANT: Read current encoder positions from ODrives
+        // This syncs software state with actual motor positions - NO JUMP
+        if (odrv1_user_data.received_feedback) {
+          motor1_position = motor1_target = odrv1_user_data.last_feedback.Pos_Estimate;
+        }
+        if (odrv2_user_data.received_feedback) {
+          motor2_position = motor2_target = odrv2_user_data.last_feedback.Pos_Estimate;
+        }
+        if (odrv3_user_data.received_feedback) {
+          motor3_position = motor3_target = odrv3_user_data.last_feedback.Pos_Estimate;
+        }
+        Serial.println(">>> AUTO-ENABLED (synced to current positions) <<<");
       }
       
       // Apply keyboard movement (same step size as local keyboard)
@@ -218,12 +319,16 @@ void processSerialCommand(String cmd) {
 
 void emergencyStop() {
   Serial.println("!!! EMERGENCY STOP !!!");
-  motor3_target = motor1_target = motor2_target = 0;
-  motor3_position = motor1_position = motor2_position = 0;
   
-  if (odrv3_user_data.is_active) odrv3.setPosition(0);
-  if (odrv1_user_data.is_active) odrv1.setPosition(0);
-  if (odrv2_user_data.is_active) odrv2.setPosition(0);
+  // Stop in place - set target to current position (no movement)
+  motor3_target = motor3_position;
+  motor1_target = motor1_position;
+  motor2_target = motor2_position;
+  
+  // Command motors to hold current position
+  if (odrv3_user_data.is_active) odrv3.setPosition(motor3_position);
+  if (odrv1_user_data.is_active) odrv1.setPosition(motor1_position);
+  if (odrv2_user_data.is_active) odrv2.setPosition(motor2_position);
   
   safety_enabled = false;
   vr_enabled = false;
@@ -239,13 +344,49 @@ void printStatus() {
   Serial.println("\n--- STATUS ---");
   Serial.print("Safety: "); Serial.println(safety_enabled ? "ON" : "OFF");
   Serial.print("VR Mode: "); Serial.println(vr_enabled ? "ON" : "OFF");
-  Serial.print("M3: "); Serial.print(motor3_position, 2); 
-  Serial.print(" -> "); Serial.println(motor3_target, 2);
-  Serial.print("M1: "); Serial.print(motor1_position, 2);
-  Serial.print(" -> "); Serial.println(motor1_target, 2);
-  Serial.print("M2: "); Serial.print(motor2_position, 2);
+  Serial.print("Base (Q/E):     "); Serial.print(motor2_position, 2); 
   Serial.print(" -> "); Serial.println(motor2_target, 2);
+  Serial.print("Shoulder (A/D): "); Serial.print(motor1_position, 2);
+  Serial.print(" -> "); Serial.println(motor1_target, 2);
+  Serial.print("Elbow (W/S):    "); Serial.print(motor3_position, 2);
+  Serial.print(" -> "); Serial.println(motor3_target, 2);
+  Serial.print("Motor ratio: "); Serial.print(motor_ratio, 6);
+  Serial.println(" turns/deg");
   Serial.println("--------------\n");
+}
+
+void startCalibration() {
+  calibrating = true;
+  
+  // Sync with actual encoder position first, then zero our counter
+  // This way we track relative movement from here
+  if (odrv3_user_data.received_feedback) {
+    float actual_pos = odrv3_user_data.last_feedback.Pos_Estimate;
+    motor3_target = actual_pos;
+    motor3_position = actual_pos;
+  }
+  // Store the starting position for calibration
+  calibration_start = motor3_position;
+  
+  Serial.println("\n=== CALIBRATING MOTOR RATIO ===");
+  Serial.println("Using Elbow (W/S) for calibration");
+  Serial.print("Starting position: "); Serial.println(calibration_start, 2);
+  Serial.println("Move elbow to 180 degrees using W/S, then press C again");
+}
+
+void finishCalibration() {
+  // Calculate turns moved since calibration started
+  float turns = abs(motor3_position - calibration_start);
+  motor_ratio = turns / 180.0f;
+  
+  Serial.print("\nResult: "); Serial.print(turns, 2);
+  Serial.print(" turns = 180 deg\n");
+  Serial.print("Motor ratio: "); Serial.print(motor_ratio, 6);
+  Serial.println(" turns/degree");
+  Serial.println("\n=== CALIBRATION COMPLETE ===");
+  Serial.println("This ratio applies to all motors.\n");
+  
+  calibrating = false;
 }
 
 // ============ KEYBOARD CONTROL (FALLBACK) ============
@@ -281,6 +422,20 @@ void processKeyboard(char key) {
   
   if (key == 'p' || key == 'P') {
     printStatus();
+    return;
+  }
+  
+  // Calibration mode
+  if (key == 'c' || key == 'C') {
+    if (!safety_enabled) {
+      Serial.println("Press X to enable first");
+      return;
+    }
+    if (calibrating) {
+      finishCalibration();
+    } else {
+      startCalibration();
+    }
     return;
   }
   
@@ -369,49 +524,17 @@ void setup() {
     while (true);
   }
 
-  Serial.println("Waiting for ODrives (5 sec)...");
+  // Assume all ODrives are active (skip detection)
+  Serial.println("Assuming all 3 ODrives are connected...");
+  odrv1_user_data.is_active = true;
+  odrv2_user_data.is_active = true;
+  odrv3_user_data.is_active = true;
   
-  uint32_t start_time = millis();
-  while (millis() - start_time < 5000) {
+  // Brief pause to let CAN stabilize
+  for (int i = 0; i < 20; i++) {
     pumpEvents(can_intf);
     delay(50);
   }
-
-  Serial.println("\nDetected:");
-  int count = 0;
-  
-  if (odrv3_user_data.received_heartbeat) {
-    Serial.println("  ✓ ODrive 3");
-    odrv3_user_data.is_active = true;
-    count++;
-  } else {
-    Serial.println("  ✗ ODrive 3");
-  }
-  
-  if (odrv1_user_data.received_heartbeat) {
-    Serial.println("  ✓ ODrive 1");
-    odrv1_user_data.is_active = true;
-    count++;
-  } else {
-    Serial.println("  ✗ ODrive 1");
-  }
-  
-  if (odrv2_user_data.received_heartbeat) {
-    Serial.println("  ✓ ODrive 2");
-    odrv2_user_data.is_active = true;
-    count++;
-  } else {
-    Serial.println("  ✗ ODrive 2");
-  }
-
-  if (count == 0) {
-    Serial.println("\nERROR: No ODrives found!");
-    while (true);
-  }
-
-  Serial.print("\nFound ");
-  Serial.print(count);
-  Serial.println(" ODrive(s)\n");
 
   // Set gains
   if (odrv3_user_data.is_active) {
@@ -497,7 +620,7 @@ void loop() {
       
       // Also check for single-character keyboard commands
       // Note: Don't include P here - it conflicts with P:x,y,z position commands
-      if (serialBuffer.length() == 1 && strchr("xXvVwWsSaAdDqQeE 0", c)) {
+      if (serialBuffer.length() == 1 && strchr("xXvVwWsSaAdDqQeE 0cC", c)) {
         processKeyboard(c);
         serialBuffer = "";
       }

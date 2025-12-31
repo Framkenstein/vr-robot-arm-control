@@ -38,6 +38,8 @@
       #enableButton.active { background: #FF9800; }
       #stopButton { background: #f44336; color: white; font-weight: bold; }
       #homeButton { background: #9E9E9E; color: white; }
+      #calibrateButton { background: #9C27B0; color: white; }
+      #calibrateButton.active { background: #E91E63; }
       #keyboardControls {
         background: rgba(0,0,0,0.8);
         color: white;
@@ -77,6 +79,7 @@
       <button id="enableButton">Enable VR Control</button>
       <button id="stopButton">EMERGENCY STOP</button>
       <button id="homeButton">Home Position</button>
+      <button id="calibrateButton">Calibrate</button>
       <div id="status">Status: Disconnected</div>
       <div id="keyboardControls">
         <h4>Keyboard Control</h4>
@@ -106,6 +109,7 @@
         sendStop, 
         sendHome,
         sendKeyboardMove,
+        sendCalibrate,
         isVrControlActive 
       } from './xrMechanicalControllerInput.js';
 
@@ -150,6 +154,23 @@
         document.getElementById('status').textContent = 'Status: Homing...';
       });
 
+      // Calibration
+      let calibrating = false;
+      document.getElementById('calibrateButton').addEventListener('click', () => {
+        sendCalibrate();
+        calibrating = !calibrating;
+        const btn = document.getElementById('calibrateButton');
+        if (calibrating) {
+          btn.classList.add('active');
+          btn.textContent = '✓ Finish Calibration';
+          document.getElementById('status').textContent = 'Status: Move W/S to 180°, then click again';
+        } else {
+          btn.classList.remove('active');
+          btn.textContent = 'Calibrate';
+          document.getElementById('status').textContent = 'Status: Calibration complete!';
+        }
+      });
+
       // Keyboard control state
       const keysPressed = new Set();
       const keyMoveInterval = 50; // Send moves at 20Hz
@@ -180,6 +201,9 @@
       }
 
       document.addEventListener('keydown', (e) => {
+        // Ignore auto-repeat events
+        if (e.repeat) return;
+        
         const key = e.key.toLowerCase();
         
         // Emergency stop
@@ -199,7 +223,10 @@
           keysPressed.add(key);
           updateKeyVisual(key, true);
           
-          // Start interval if not running
+          // Send first command immediately
+          processKeyboardInput();
+          
+          // Start interval for held keys (with delay before first repeat)
           if (!keyboardInterval) {
             keyboardInterval = setInterval(processKeyboardInput, keyMoveInterval);
           }
